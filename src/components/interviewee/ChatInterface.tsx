@@ -264,13 +264,14 @@ export const ChatInterface = () => {
     };
 
     const handleTimeUp = async () => {
-        // ✅ Read from inputValue (what user typed but didn't submit)
-        const answerToSubmit = inputValue.trim() || 'No answer provided (time expired)';
-
         if (!currentCandidateId || !candidate) return;
         const currentQuestionIndex = candidate.currentQuestionIndex;
         const currentQuestion = candidate.questions[currentQuestionIndex];
         if (!currentQuestion) return;
+
+        // ✅ Check if user actually typed something
+        const userTypedAnswer = inputValue.trim();
+        const answerToSubmit = userTypedAnswer || 'No answer provided (time expired)';
 
         addUserMessage(answerToSubmit);
         setInputValue(''); // Clear input
@@ -278,30 +279,54 @@ export const ChatInterface = () => {
         dispatch(setProcessing(true));
 
         try {
-            const { score, judgement } = await OpenAIService.evaluateAnswer(
-                currentQuestion.text,
-                answerToSubmit,
-                currentQuestion.difficulty
-            );
+            // ✅ If no answer was typed, assign 0 score without AI evaluation
+            if (!userTypedAnswer) {
+                dispatch(updateQuestion({
+                    id: currentCandidateId,
+                    questionIndex: currentQuestionIndex,
+                    updates: {
+                        answer: answerToSubmit,
+                        score: 0,
+                        aiJudgement: 'No answer provided - Time expired',
+                    },
+                }));
 
-            dispatch(updateQuestion({
-                id: currentCandidateId,
-                questionIndex: currentQuestionIndex,
-                updates: {
-                    answer: answerToSubmit,
-                    score,
-                    aiJudgement: judgement,
-                },
-            }));
-
-            addSystemMessage(
-                `**Evaluation:** ${judgement}\n\n**Score:** ${score}/${currentQuestion.difficulty === QuestionDifficulty.EASY
+                const maxScore = currentQuestion.difficulty === QuestionDifficulty.EASY
                     ? 10
                     : currentQuestion.difficulty === QuestionDifficulty.MEDIUM
                         ? 20
-                        : 30
-                }`
-            );
+                        : 30;
+
+                addSystemMessage(
+                    `**Evaluation:** No answer provided - Time expired\n\n**Score:** 0/${maxScore}`
+                );
+            } else {
+                // ✅ If user typed something, evaluate it normally
+                const { score, judgement } = await OpenAIService.evaluateAnswer(
+                    currentQuestion.text,
+                    answerToSubmit,
+                    currentQuestion.difficulty
+                );
+
+                dispatch(updateQuestion({
+                    id: currentCandidateId,
+                    questionIndex: currentQuestionIndex,
+                    updates: {
+                        answer: answerToSubmit,
+                        score,
+                        aiJudgement: judgement,
+                    },
+                }));
+
+                addSystemMessage(
+                    `**Evaluation:** ${judgement}\n\n**Score:** ${score}/${currentQuestion.difficulty === QuestionDifficulty.EASY
+                        ? 10
+                        : currentQuestion.difficulty === QuestionDifficulty.MEDIUM
+                            ? 20
+                            : 30
+                    }`
+                );
+            }
 
             // ✅ Immediately move to next question after time expires
             await generateNextQuestion();
