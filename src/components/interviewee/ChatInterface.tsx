@@ -64,7 +64,10 @@ export const ChatInterface = () => {
     }, [isProcessing]);
 
     useEffect(() => {
+        // ✅ Reset processing state when component mounts or candidate changes
         if (candidate && candidate.status === InterviewStatus.COLLECTING_INFO) {
+            dispatch(setProcessing(false));
+
             const missing = getMissingFields(candidate.info);
             setMissingFields(missing);
 
@@ -77,7 +80,7 @@ export const ChatInterface = () => {
                 askedOnce.current = true;
                 setCollectingField(missing[0]);
                 addSystemMessage(`Please provide your ${missing[0]}.`);
-            } else if (missing.length === 0 && !generatingQuestion.current) { // ✅ Add check here
+            } else if (missing.length === 0 && !generatingQuestion.current) {
                 startInterview();
             }
         }
@@ -109,7 +112,7 @@ export const ChatInterface = () => {
         if (!currentCandidateId || !collectingField) return;
 
         addUserMessage(value);
-        setInputValue('');
+        setInputValue(''); // Clear the input
 
         let isValid = false;
         let errorMessage = '';
@@ -143,6 +146,7 @@ export const ChatInterface = () => {
             addSystemMessage(`Great! Now, please provide your ${updatedMissing[0]}.`);
         } else {
             setCollectingField(null);
+            dispatch(setProcessing(false)); // ✅ Add this line
             addSystemMessage(
                 `Perfect! All information collected. Let's begin your interview. You'll answer 6 questions: 2 Easy, 2 Medium, and 2 Hard. Good luck! 🚀`
             );
