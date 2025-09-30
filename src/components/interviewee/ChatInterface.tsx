@@ -39,6 +39,7 @@ export const ChatInterface = () => {
     const [isListening, setIsListening] = useState(false);
     const [timerKey, setTimerKey] = useState(0); // Key to reset timer component
     const [shouldStopTimer, setShouldStopTimer] = useState(false); // Flag to stop timer
+    const generatingQuestion = useRef(false);
 
     // ✅ Auto-scroll to bottom whenever chat history updates
     useEffect(() => {
@@ -76,7 +77,7 @@ export const ChatInterface = () => {
                 askedOnce.current = true;
                 setCollectingField(missing[0]);
                 addSystemMessage(`Please provide your ${missing[0]}.`);
-            } else if (missing.length === 0) {
+            } else if (missing.length === 0 && !generatingQuestion.current) { // ✅ Add check here
                 startInterview();
             }
         }
@@ -108,6 +109,7 @@ export const ChatInterface = () => {
         if (!currentCandidateId || !collectingField) return;
 
         addUserMessage(value);
+        setInputValue('');
 
         let isValid = false;
         let errorMessage = '';
@@ -153,16 +155,24 @@ export const ChatInterface = () => {
 
     const startInterview = async () => {
         if (!currentCandidateId || !candidate) return;
+
+        // guard to prevent multiple calls
+        if (candidate.status === InterviewStatus.IN_PROGRESS) return;
         dispatch(updateInterviewStatus({ id: currentCandidateId, status: InterviewStatus.IN_PROGRESS }));
         await generateNextQuestion();
     };
 
     const generateNextQuestion = async () => {
         if (!currentCandidateId || !candidate) return;
+        if (isProcessing || generatingQuestion.current) return; // ✅ Check ref
+
+        generatingQuestion.current = true; // ✅ Set flag
+
         const questionSequence = getQuestionSequence();
         const nextIndex = candidate.questions.length;
 
         if (nextIndex >= 6) {
+            generatingQuestion.current = false; // ✅ Reset flag
             await completeInterview();
             return;
         }
@@ -187,18 +197,19 @@ export const ChatInterface = () => {
 
             addSystemMessage(`**Question ${nextIndex + 1}/6** (${difficulty})\n\n${questionText}`);
 
-            // Reset timer and allow it to run
             setShouldStopTimer(false);
             setTimerKey(prev => prev + 1);
         } catch (error: any) {
             addSystemMessage(`Error generating question: ${error.message}. Please refresh and try again.`);
         } finally {
             dispatch(setProcessing(false));
+            generatingQuestion.current = false; // ✅ Reset flag in finally
         }
     };
 
     const handleSubmitAnswer = async () => {
         if (!currentCandidateId || !candidate || !inputValue.trim()) return;
+        if (isProcessing) return;
         const currentQuestionIndex = candidate.currentQuestionIndex;
         const currentQuestion = candidate.questions[currentQuestionIndex];
         if (!currentQuestion) return;
