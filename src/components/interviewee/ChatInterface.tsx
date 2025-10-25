@@ -20,7 +20,8 @@ import {
     setProcessing,
 } from '@/store/slices/candidateSlice';
 import { InterviewStatus, QuestionDifficulty, type ChatMessage } from '@/store/types';
-import { OpenAIService } from '@/services/openai.service';
+//import { OpenAIService } from '@/services/openai.service';
+import { GeminiService } from '@/services/gemini.service';
 import { getMissingFields, validateEmail, validatePhone, validateName } from '@/utils/validators';
 import { generateId, getTimeLimitForDifficulty, getQuestionSequence } from '@/utils/helpers';
 
@@ -186,7 +187,7 @@ export const ChatInterface = () => {
         try {
             const difficulty = questionSequence[nextIndex];
             const previousQuestions = candidate.questions.map(q => q.text);
-            const questionText = await OpenAIService.generateQuestion(difficulty, previousQuestions);
+            const questionText = await GeminiService.generateQuestion(difficulty, previousQuestions);
 
             const question = {
                 id: generateId(),
@@ -228,7 +229,7 @@ export const ChatInterface = () => {
         dispatch(setProcessing(true));
 
         try {
-            const { score, judgement } = await OpenAIService.evaluateAnswer(
+            const { score, judgement } = await GeminiService.evaluateAnswer(
                 currentQuestion.text,
                 answerToSubmit,
                 currentQuestion.difficulty
@@ -302,7 +303,7 @@ export const ChatInterface = () => {
                 );
             } else {
                 // ✅ If user typed something, evaluate it normally
-                const { score, judgement } = await OpenAIService.evaluateAnswer(
+                const { score, judgement } = await GeminiService.evaluateAnswer(
                     currentQuestion.text,
                     answerToSubmit,
                     currentQuestion.difficulty
@@ -352,7 +353,7 @@ export const ChatInterface = () => {
                 difficulty: q.difficulty,
             }));
 
-            const summary = await OpenAIService.generateFinalSummary(
+            const summary = await GeminiService.generateFinalSummary(
                 candidate.info.name || 'Candidate',
                 questionsForSummary,
                 totalScore

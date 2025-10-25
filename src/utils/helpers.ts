@@ -15,11 +15,11 @@ export const formatTime = (seconds: number): string => {
 export const getTimeLimitForDifficulty = (difficulty: QuestionDifficulty): number => {
   switch (difficulty) {
     case QuestionDifficulty.EASY:
-      return 20;
-    case QuestionDifficulty.MEDIUM:
       return 60;
-    case QuestionDifficulty.HARD:
+    case QuestionDifficulty.MEDIUM:
       return 120;
+    case QuestionDifficulty.HARD:
+      return 160;
     default:
       return 60;
   }
