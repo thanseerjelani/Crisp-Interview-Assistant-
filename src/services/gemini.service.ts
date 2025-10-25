@@ -1,7 +1,17 @@
 import { QuestionDifficulty } from '../store/types';
+import { QUESTION_BANK, DIFFICULTY_CONTEXT, MAX_SCORES } from './fallbackQuestions';
+import {
+  API_CONFIG,
+  GENERATION_CONFIG,
+  TECHNICAL_TERMS,
+  CODE_PATTERNS,
+  EXPLANATION_PATTERNS,
+  SCORING_THRESHOLDS,
+  PERFORMANCE_THRESHOLDS,
+  CHAT_RESPONSES,
+} from './constants';
 
 const API_KEY = import.meta.env.VITE_GEMINI_API_KEY;
-const API_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent';
 
 export interface EvaluationResult {
   score: number;
@@ -16,67 +26,87 @@ interface QuestionMetrics {
   complexity: number;
 }
 
-const QUESTION_BANK = {
-  [QuestionDifficulty.EASY]: [
-    'What is JSX in React and why is it useful?',
-    'Explain the difference between let, const, and var in JavaScript.',
-    'What are props in React components?',
-    'What is the purpose of the useState hook?',
-    'How do you handle events in React?',
-    'What is the virtual DOM in React?',
-    'What is the difference between == and === in JavaScript?',
-    'Explain what arrow functions are and their benefits.',
-  ],
-  [QuestionDifficulty.MEDIUM]: [
-    'Explain how the useEffect hook works in React and its dependency array.',
-    'What is the difference between controlled and uncontrolled components?',
-    'How does async/await work in JavaScript?',
-    'Explain React Context API and when you would use it.',
-    'What are Higher Order Components (HOCs) in React?',
-    'How would you optimize a React component that re-renders too often?',
-    'Explain closure in JavaScript with a practical example.',
-    'What is the difference between REST and GraphQL APIs?',
-  ],
-  [QuestionDifficulty.HARD]: [
-    'How would you optimize performance in a large React application?',
-    'Explain the concept of reconciliation in React and how keys work.',
-    'Design a scalable folder structure for a large React/Node.js application.',
-    'How would you implement server-side rendering with React?',
-    'Explain memory leaks in JavaScript and how to prevent them.',
-    'Design a caching strategy for a REST API with Redis.',
-    'How would you implement authentication using JWT in a Node.js application?',
-    'Explain the Event Loop in Node.js and how it handles asynchronous operations.',
-  ],
-};
-
-const TECHNICAL_TERMS = [
-  'component', 'hook', 'state', 'props', 'render', 'virtual dom',
-  'async', 'await', 'promise', 'callback', 'closure', 'scope',
-  'api', 'rest', 'graphql', 'middleware', 'authentication',
-  'optimization', 'performance', 'memoization', 'lazy loading',
-  'reconciliation', 'redux', 'context', 'useeffect', 'usestate',
-  'jsx', 'typescript', 'node.js', 'express', 'mongodb', 'sql',
-  'jwt', 'token', 'cache', 'redis', 'websocket', 'ssr', 'csr',
-];
-
 // Helper to delay between requests
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
+// 🐛 Debug Logger
+class DebugLogger {
+  private static enabled = import.meta.env.DEV;
+
+  static log(category: string, message: string, data?: any) {
+    if (!this.enabled) return;
+    
+    const timestamp = new Date().toLocaleTimeString();
+    const emoji = this.getCategoryEmoji(category);
+    
+    console.group(`${emoji} [${timestamp}] ${category}`);
+    console.log(message);
+    if (data) {
+      console.log('Data:', data);
+    }
+    console.groupEnd();
+  }
+
+  static error(category: string, message: string, error?: any) {
+    const timestamp = new Date().toLocaleTimeString();
+    console.group(`❌ [${timestamp}] ${category} - ERROR`);
+    console.error(message);
+    if (error) {
+      console.error('Error details:', error);
+    }
+    console.groupEnd();
+  }
+
+  static success(category: string, message: string, data?: any) {
+    if (!this.enabled) return;
+    
+    const timestamp = new Date().toLocaleTimeString();
+    console.group(`✅ [${timestamp}] ${category} - SUCCESS`);
+    console.log(message);
+    if (data) {
+      console.log('Result:', data);
+    }
+    console.groupEnd();
+  }
+
+  private static getCategoryEmoji(category: string): string {
+    const emojiMap: Record<string, string> = {
+      'API Call': '🌐',
+      'Question Generation': '❓',
+      'Answer Evaluation': '📝',
+      'Summary Generation': '📊',
+      'Fallback': '🔄',
+      'Retry': '🔁',
+    };
+    return emojiMap[category] || '🔵';
+  }
+}
+
 export class GeminiService {
   
-  private static async callGeminiAPI(prompt: string, retries = 3): Promise<string> {
+  private static async callGeminiAPI(prompt: string, retries = API_CONFIG.RETRY_ATTEMPTS): Promise<string> {
     if (!API_KEY) {
+      DebugLogger.error('API Call', 'Gemini API key is not configured');
       throw new Error('Gemini API key is not configured');
     }
+
+    DebugLogger.log('API Call', `Starting API call with ${retries} max retries`, {
+      promptLength: prompt.length,
+      promptPreview: prompt.substring(0, 100) + '...'
+    });
 
     for (let attempt = 0; attempt < retries; attempt++) {
       try {
         // Add delay between retries to avoid rate limiting
         if (attempt > 0) {
-          await delay(2000 * attempt); // 2s, 4s delays
+          const delayMs = API_CONFIG.RETRY_DELAY_BASE * attempt;
+          DebugLogger.log('Retry', `Waiting ${delayMs}ms before retry ${attempt + 1}/${retries}`);
+          await delay(delayMs);
         }
 
-        const response = await fetch(`${API_URL}?key=${API_KEY}`, {
+        DebugLogger.log('API Call', `Attempt ${attempt + 1}/${retries} - Sending request to Gemini`);
+
+        const response = await fetch(`${API_CONFIG.API_URL}?key=${API_KEY}`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -91,34 +121,45 @@ export class GeminiService {
                 ]
               }
             ],
-            generationConfig: {
-              temperature: 0.7,
-              maxOutputTokens: 200,
-            }
+            generationConfig: GENERATION_CONFIG
           })
         });
+
+        DebugLogger.log('API Call', `Response received - Status: ${response.status} ${response.statusText}`);
 
         if (!response.ok) {
           // If 503 or 429, retry
           if ((response.status === 503 || response.status === 429) && attempt < retries - 1) {
-            console.warn(`API returned ${response.status}, retrying... (${attempt + 1}/${retries})`);
+            DebugLogger.log('Retry', `API returned ${response.status}, will retry...`, {
+              attempt: attempt + 1,
+              maxRetries: retries
+            });
             continue;
           }
+          DebugLogger.error('API Call', `API error: ${response.status} ${response.statusText}`);
           throw new Error(`Gemini API error: ${response.status} ${response.statusText}`);
         }
 
         const data = await response.json();
         
         if (!data.candidates || !data.candidates[0]?.content?.parts?.[0]?.text) {
+          DebugLogger.error('API Call', 'Invalid response structure from Gemini API', data);
           throw new Error('Invalid response from Gemini API');
         }
 
-        return data.candidates[0].content.parts[0].text.trim();
+        const result = data.candidates[0].content.parts[0].text.trim();
+        DebugLogger.success('API Call', 'API call successful', {
+          responseLength: result.length,
+          responsePreview: result.substring(0, 100) + '...'
+        });
+
+        return result;
       } catch (error) {
         if (attempt === retries - 1) {
+          DebugLogger.error('API Call', `All ${retries} attempts failed`, error);
           throw error;
         }
-        console.warn(`Attempt ${attempt + 1} failed, retrying...`);
+        DebugLogger.log('Retry', `Attempt ${attempt + 1} failed, will retry...`, error);
       }
     }
 
@@ -129,20 +170,22 @@ export class GeminiService {
     difficulty: QuestionDifficulty,
     previousQuestions: string[]
   ): Promise<string> {
+    DebugLogger.log('Question Generation', `Generating ${difficulty} question`, {
+      previousQuestionsCount: previousQuestions.length,
+      hasApiKey: !!API_KEY
+    });
+
     if (!API_KEY) {
-      return this.getFallbackQuestion(difficulty, previousQuestions);
+      DebugLogger.log('Fallback', 'No API key - using fallback question bank');
+      const question = this.getFallbackQuestion(difficulty, previousQuestions);
+      DebugLogger.success('Fallback', 'Fallback question selected', { question });
+      return question;
     }
 
     try {
-      const difficultyContext = {
-        [QuestionDifficulty.EASY]: 'basic concepts like variables, functions, simple syntax',
-        [QuestionDifficulty.MEDIUM]: 'intermediate topics like APIs, state management, async operations',
-        [QuestionDifficulty.HARD]: 'advanced concepts like optimization, architecture, design patterns',
-      };
-
       const prompt = `Generate ONE short ${difficulty} interview question for Full Stack Developer (React/Node.js).
 
-Topic: ${difficultyContext[difficulty]}
+Topic: ${DIFFICULTY_CONTEXT[difficulty]}
 ${previousQuestions.length > 0 ? `Avoid: ${previousQuestions.slice(0, 3).join('; ')}` : ''}
 
 Requirements:
@@ -155,15 +198,24 @@ Return ONLY the question.`;
 
       let question = await this.callGeminiAPI(prompt);
 
+      DebugLogger.log('Question Generation', 'Raw question received from API', { 
+        raw: question,
+        wordCount: question.split(' ').length 
+      });
+
       // Clean up the response
       question = question
         .replace(/^(Question:|Answer:|Here's a question:|Here is a question:)/i, '')
         .replace(/\n+/g, ' ')
-        .replace(/^["']|["']$/g, '') // Remove quotes
+        .replace(/^["']|["']$/g, '')
         .trim();
 
       // If too long, truncate at sensible point
       if (question.split(' ').length > 20) {
+        DebugLogger.log('Question Generation', 'Question too long - truncating', {
+          originalLength: question.split(' ').length,
+          truncatedTo: 15
+        });
         const words = question.split(' ');
         question = words.slice(0, 15).join(' ') + '?';
       }
@@ -172,10 +224,17 @@ Return ONLY the question.`;
         question += '?';
       }
 
+      DebugLogger.success('Question Generation', 'Question generated successfully', { 
+        question,
+        wordCount: question.split(' ').length 
+      });
+
       return question || this.getFallbackQuestion(difficulty, previousQuestions);
     } catch (error) {
-      console.error('API error, using fallback:', error);
-      return this.getFallbackQuestion(difficulty, previousQuestions);
+      DebugLogger.error('Question Generation', 'API failed - falling back to question bank', error);
+      const fallbackQuestion = this.getFallbackQuestion(difficulty, previousQuestions);
+      DebugLogger.success('Fallback', 'Fallback question selected', { question: fallbackQuestion });
+      return fallbackQuestion;
     }
   }
 
@@ -184,20 +243,26 @@ Return ONLY the question.`;
     answer: string,
     difficulty: QuestionDifficulty
   ): Promise<EvaluationResult> {
-    const maxScore = {
-      [QuestionDifficulty.EASY]: 10,
-      [QuestionDifficulty.MEDIUM]: 20,
-      [QuestionDifficulty.HARD]: 30,
-    };
+    DebugLogger.log('Answer Evaluation', `Evaluating ${difficulty} answer`, {
+      questionPreview: question.substring(0, 50) + '...',
+      answerLength: answer.length,
+      hasApiKey: !!API_KEY
+    });
 
-    // If no API key or answer is too short, use fallback
-    if (!API_KEY || answer.trim().length < 10) {
-      return this.getIntelligentEvaluation(answer, difficulty);
+    // If no API key, use fallback
+    if (!API_KEY) {
+      DebugLogger.log('Fallback', 'Using intelligent local evaluation - No API key');
+      const result = this.getIntelligentEvaluation(answer, difficulty);
+      DebugLogger.success('Fallback', 'Local evaluation completed', result);
+      return result;
     }
+    
+    // Even short answers should be evaluated by API
+    // The API can handle empty or short answers better than our local logic
 
     try {
       // Add small delay before evaluation to avoid rate limits
-      await delay(1000);
+      await delay(API_CONFIG.EVALUATION_DELAY);
 
       const prompt = `Evaluate this ${difficulty} interview answer.
 
@@ -205,19 +270,25 @@ Q: ${question}
 A: ${answer}
 
 Format:
-SCORE: [0-${maxScore[difficulty]}]
+SCORE: [0-${MAX_SCORES[difficulty]}]
 FEEDBACK: [2 short sentences]`;
 
       const text = await this.callGeminiAPI(prompt);
+
+      DebugLogger.log('Answer Evaluation', 'Parsing API response', { responsePreview: text.substring(0, 100) });
 
       const scoreMatch = text.match(/SCORE[:\s]+(\d+)/i);
       const feedbackMatch = text.match(/FEEDBACK[:\s]+(.+)/is);
 
       let score = 0;
       if (scoreMatch) {
-        score = Math.min(parseInt(scoreMatch[1]), maxScore[difficulty]);
+        score = Math.min(parseInt(scoreMatch[1]), MAX_SCORES[difficulty]);
+        DebugLogger.log('Answer Evaluation', `Score extracted: ${score}/${MAX_SCORES[difficulty]}`);
       } else {
-        return this.getIntelligentEvaluation(answer, difficulty);
+        DebugLogger.log('Fallback', 'Could not parse score from API - using local evaluation');
+        const result = this.getIntelligentEvaluation(answer, difficulty);
+        DebugLogger.success('Fallback', 'Local evaluation completed', result);
+        return result;
       }
 
       let judgement = feedbackMatch 
@@ -229,10 +300,14 @@ FEEDBACK: [2 short sentences]`;
         .replace(/\s+/g, ' ')
         .trim();
 
-      return { score, judgement };
+      const result = { score, judgement };
+      DebugLogger.success('Answer Evaluation', 'Answer evaluated successfully via API', result);
+      return result;
     } catch (error) {
-      console.error('API error, using intelligent evaluation:', error);
-      return this.getIntelligentEvaluation(answer, difficulty);
+      DebugLogger.error('Answer Evaluation', 'API failed - falling back to local evaluation', error);
+      const result = this.getIntelligentEvaluation(answer, difficulty);
+      DebugLogger.success('Fallback', 'Local evaluation completed', result);
+      return result;
     }
   }
 
@@ -248,13 +323,23 @@ FEEDBACK: [2 short sentences]`;
   ): Promise<string> {
     const percentage = Math.round((totalScore / 120) * 100);
 
+    DebugLogger.log('Summary Generation', `Generating summary for ${candidateName}`, {
+      totalScore,
+      percentage,
+      questionsCount: questions.length,
+      hasApiKey: !!API_KEY
+    });
+
     if (!API_KEY) {
-      return this.getIntelligentSummary(candidateName, questions, totalScore, percentage);
+      DebugLogger.log('Fallback', 'No API key - using intelligent local summary');
+      const summary = this.getIntelligentSummary(candidateName, questions, totalScore, percentage);
+      DebugLogger.success('Fallback', 'Local summary generated', { summaryLength: summary.length });
+      return summary;
     }
 
     try {
       // Add delay before summary to avoid rate limits
-      await delay(1500);
+      await delay(API_CONFIG.SUMMARY_DELAY);
 
       const prompt = `Professional interview summary for ${candidateName}.
 
@@ -272,25 +357,27 @@ Write 3 sentences covering:
         .replace(/^(Summary:|Here's a summary:|Interview Summary:)/i, '')
         .trim();
 
+      DebugLogger.success('Summary Generation', 'Summary generated successfully via API', {
+        summaryLength: summary.length,
+        summaryPreview: summary.substring(0, 100) + '...'
+      });
+
       return summary || this.getIntelligentSummary(candidateName, questions, totalScore, percentage);
     } catch (error) {
-      console.error('API error, using intelligent summary:', error);
-      return this.getIntelligentSummary(candidateName, questions, totalScore, percentage);
+      DebugLogger.error('Summary Generation', 'API failed - falling back to local summary', error);
+      const summary = this.getIntelligentSummary(candidateName, questions, totalScore, percentage);
+      DebugLogger.success('Fallback', 'Local summary generated', { summaryLength: summary.length });
+      return summary;
     }
   }
 
   static async chatResponse(_message: string, context: string): Promise<string> {
-    const responses = {
-      name: "Thank you! I've recorded your name.",
-      email: "Great! Your email has been saved.",
-      phone: "Perfect! Your phone number is recorded.",
-    };
-    
-    for (const [key, response] of Object.entries(responses)) {
+    for (const [key, response] of Object.entries(CHAT_RESPONSES)) {
+      if (key === 'default') continue;
       if (context.includes(key)) return response;
     }
     
-    return "Thank you for your response!";
+    return CHAT_RESPONSES.default;
   }
 
   private static getFallbackQuestion(
@@ -301,33 +388,30 @@ Write 3 sentences covering:
     const availableQuestions = questions.filter(q => !previousQuestions.includes(q));
     
     const pool = availableQuestions.length > 0 ? availableQuestions : questions;
-    return pool[Math.floor(Math.random() * pool.length)];
+    const selected = pool[Math.floor(Math.random() * pool.length)];
+    
+    DebugLogger.log('Fallback', 'Question selected from local bank', {
+      difficulty,
+      availableCount: availableQuestions.length,
+      totalCount: questions.length,
+      selected
+    });
+    
+    return selected;
   }
 
   private static analyzeAnswer(answer: string): QuestionMetrics {
     const words = answer.trim().split(/\s+/);
     const wordCount = words.length;
     
-    const codePatterns = [
-      /```[\s\S]*?```/g,
-      /`[^`]+`/g,
-      /\b(function|const|let|var|if|else|return|import|export)\b/g,
-      /[{}[\]();]/g,
-      /=>/g,
-    ];
-    const hasCodeExample = codePatterns.some(pattern => pattern.test(answer));
+    const hasCodeExample = CODE_PATTERNS.some(pattern => pattern.test(answer));
     
     const lowerAnswer = answer.toLowerCase();
     const technicalTermCount = TECHNICAL_TERMS.filter(term => 
       lowerAnswer.includes(term)
     ).length;
     
-    const explanationPatterns = [
-      /\b(because|since|due to|reason|allows|enables|helps)\b/i,
-      /\b(for example|such as|like|including)\b/i,
-      /\b(first|second|then|finally|additionally)\b/i,
-    ];
-    const hasExplanation = explanationPatterns.some(pattern => pattern.test(answer));
+    const hasExplanation = EXPLANATION_PATTERNS.some(pattern => pattern.test(answer));
     
     const sentences = answer.split(/[.!?]+/).filter(s => s.trim().length > 10);
     const avgSentenceLength = sentences.length > 0 
@@ -354,44 +438,50 @@ Write 3 sentences covering:
     answer: string,
     difficulty: QuestionDifficulty
   ): EvaluationResult {
-    const maxScore = {
-      [QuestionDifficulty.EASY]: 10,
-      [QuestionDifficulty.MEDIUM]: 20,
-      [QuestionDifficulty.HARD]: 30,
-    };
-
     const metrics = this.analyzeAnswer(answer);
     
-    let baseScore = 0;
-    if (metrics.wordCount < 10) baseScore = 0.2;
-    else if (metrics.wordCount < 25) baseScore = 0.4;
-    else if (metrics.wordCount < 50) baseScore = 0.6;
-    else if (metrics.wordCount < 100) baseScore = 0.75;
-    else baseScore = 0.85;
+    DebugLogger.log('Fallback', 'Analyzing answer metrics', {
+      wordCount: metrics.wordCount,
+      hasCodeExample: metrics.hasCodeExample,
+      technicalTermCount: metrics.technicalTermCount,
+      hasExplanation: metrics.hasExplanation,
+      complexity: metrics.complexity.toFixed(2)
+    });
     
-    const technicalBonus = Math.min(metrics.technicalTermCount * 0.05, 0.2);
-    const codeBonus = metrics.hasCodeExample ? 0.15 : 0;
-    const explanationBonus = metrics.hasExplanation ? 0.1 : 0;
-    const complexityBonus = metrics.complexity * 0.1;
+    const wc = SCORING_THRESHOLDS.wordCount;
+    const bs = SCORING_THRESHOLDS.baseScores;
+    
+    let baseScore = 0;
+    if (metrics.wordCount < wc.minimal) baseScore = bs.minimal;
+    else if (metrics.wordCount < wc.short) baseScore = bs.short;
+    else if (metrics.wordCount < wc.medium) baseScore = bs.medium;
+    else if (metrics.wordCount < wc.long) baseScore = bs.long;
+    else baseScore = bs.extensive;
+    
+    const bonuses = SCORING_THRESHOLDS.bonuses;
+    const technicalBonus = Math.min(
+      metrics.technicalTermCount * bonuses.technicalTermMultiplier, 
+      bonuses.technicalTermMax
+    );
+    const codeBonus = metrics.hasCodeExample ? bonuses.codeExample : 0;
+    const explanationBonus = metrics.hasExplanation ? bonuses.explanation : 0;
+    const complexityBonus = metrics.complexity * bonuses.complexityMax;
     
     let finalScore = baseScore + technicalBonus + codeBonus + explanationBonus + complexityBonus;
     
-    const difficultyMultiplier = {
-      [QuestionDifficulty.EASY]: 0.9,
-      [QuestionDifficulty.MEDIUM]: 0.85,
-      [QuestionDifficulty.HARD]: 0.8,
-    };
-    finalScore *= difficultyMultiplier[difficulty];
+    const diffMultiplier = SCORING_THRESHOLDS.difficultyMultipliers[difficulty];
+    finalScore *= diffMultiplier;
     
-    finalScore = Math.min(Math.max(finalScore, 0.15), 0.95);
+    const { min, max } = SCORING_THRESHOLDS.finalScore;
+    finalScore = Math.min(Math.max(finalScore, min), max);
     
-    const score = Math.round(maxScore[difficulty] * finalScore);
+    const score = Math.round(MAX_SCORES[difficulty] * finalScore);
     
     const feedbackParts = [];
     
-    if (metrics.wordCount < 25) {
+    if (metrics.wordCount < wc.short) {
       feedbackParts.push('Consider providing more detailed explanations');
-    } else if (metrics.wordCount > 100) {
+    } else if (metrics.wordCount > wc.long) {
       feedbackParts.push('Comprehensive answer with good depth');
     } else {
       feedbackParts.push('Good level of detail in your explanation');
@@ -433,9 +523,9 @@ Write 3 sentences covering:
     percentage: number
   ): string {
     const performanceByDifficulty = {
-      [QuestionDifficulty.EASY]: { scores: [] as number[], max: 10 },
-      [QuestionDifficulty.MEDIUM]: { scores: [] as number[], max: 20 },
-      [QuestionDifficulty.HARD]: { scores: [] as number[], max: 30 },
+      [QuestionDifficulty.EASY]: { scores: [] as number[], max: MAX_SCORES[QuestionDifficulty.EASY] },
+      [QuestionDifficulty.MEDIUM]: { scores: [] as number[], max: MAX_SCORES[QuestionDifficulty.MEDIUM] },
+      [QuestionDifficulty.HARD]: { scores: [] as number[], max: MAX_SCORES[QuestionDifficulty.HARD] },
     };
     
     questions.forEach(q => {
@@ -458,6 +548,12 @@ Write 3 sentences covering:
       performanceByDifficulty[QuestionDifficulty.HARD].max
     );
     
+    DebugLogger.log('Fallback', 'Calculating performance breakdown', {
+      easy: `${easyPerf}%`,
+      medium: `${mediumPerf}%`,
+      hard: `${hardPerf}%`
+    });
+    
     const strengths = [];
     const weaknesses = [];
     
@@ -477,16 +573,17 @@ Write 3 sentences covering:
     if (avgTechnicalTerms >= 3) strengths.push('strong technical vocabulary');
     if (codeExampleCount >= 3) strengths.push('practical code examples');
     
+    const pt = PERFORMANCE_THRESHOLDS;
     let performanceDesc = '';
-    if (percentage >= 85) performanceDesc = 'exceptional performance';
-    else if (percentage >= 75) performanceDesc = 'strong performance';
-    else if (percentage >= 65) performanceDesc = 'solid performance';
-    else if (percentage >= 50) performanceDesc = 'adequate performance';
+    if (percentage >= pt.exceptional) performanceDesc = 'exceptional performance';
+    else if (percentage >= pt.strong) performanceDesc = 'strong performance';
+    else if (percentage >= pt.solid) performanceDesc = 'solid performance';
+    else if (percentage >= pt.adequate) performanceDesc = 'adequate performance';
     else performanceDesc = 'developing performance';
     
     let recommendation = '';
-    if (percentage >= 85) recommendation = 'Strong Yes - Outstanding candidate with deep technical knowledge';
-    else if (percentage >= 75) recommendation = 'Yes - Solid hire with good technical foundation';
+    if (percentage >= pt.exceptional) recommendation = 'Strong Yes - Outstanding candidate with deep technical knowledge';
+    else if (percentage >= pt.strong) recommendation = 'Yes - Solid hire with good technical foundation';
     else if (percentage >= 60) recommendation = 'Maybe - Shows potential, needs development in specific areas';
     else recommendation = 'No - Requires significant additional experience';
     
